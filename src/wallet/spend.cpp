@@ -1016,6 +1016,7 @@ void DiscourageFeeSniping(CMutableTransaction& tx, FastRandomContext& rng_fast,
     // now we ensure code won't be written that makes assumptions about
     // nLockTime that preclude a fix later.
     if (IsCurrentForAntiFeeSniping(chain, block_hash)) {
+        uint32_t previous_locktime = tx.nLockTime;
         tx.nLockTime = block_height;
 
         // Secondly occasionally randomly pick a nLockTime even further back, so
@@ -1023,7 +1024,15 @@ void DiscourageFeeSniping(CMutableTransaction& tx, FastRandomContext& rng_fast,
         // e.g. high-latency mix networks and some CoinJoin implementations, have
         // better privacy.
         if (rng_fast.randrange(10) == 0) {
-            tx.nLockTime = std::max(0, int(tx.nLockTime) - int(rng_fast.randrange(100)));
+            // If a previous lockitme is passed (like in the bump fee case), the
+            // backdating is limited betwen the current height and the previous lockitme
+            if (previous_locktime > 0){
+                // To avoid issues with the randrange, locktime_range cannot be 0
+                int locktime_range = std::max(1, std::min(100, int(block_height - previous_locktime)));
+                tx.nLockTime = std::max(int(previous_locktime), int(tx.nLockTime) - int(rng_fast.randrange(locktime_range)));
+            }else{
+                tx.nLockTime = std::max(0, int(tx.nLockTime) - int(rng_fast.randrange(100)));
+            }
         }
     } else {
         // If our chain is lagging behind, we can't discourage fee sniping nor help
@@ -1317,10 +1326,13 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
             txNew.vin.back().scriptWitness = *scripts.second;
         }
     }
+    // txNew.nLockTime = 0;
     if (coin_control.m_locktime) {
         txNew.nLockTime = coin_control.m_locktime.value();
         // If we have a locktime set, we can't use anti-fee-sniping
         use_anti_fee_sniping = false;
+    } else if (coin_control.m_previous_locktime.has_value()) {
+            txNew.nLockTime = coin_control.m_previous_locktime.value();
     }
     if (use_anti_fee_sniping) {
         DiscourageFeeSniping(txNew, rng_fast, wallet.chain(), wallet.GetLastBlockHash(), wallet.GetLastBlockHeight());
