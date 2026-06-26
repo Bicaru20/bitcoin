@@ -1332,6 +1332,11 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
         // If we have a locktime set, we can't use anti-fee-sniping
         use_anti_fee_sniping = false;
     } else if (coin_control.m_previous_locktime.has_value()) {
+           // If the previous locktime is time-based, we keep the same locktime,
+           //and we don't apply fee sniping
+           if (coin_control.m_previous_locktime >= LOCKTIME_THRESHOLD){
+               use_anti_fee_sniping = false;
+            }
             txNew.nLockTime = coin_control.m_previous_locktime.value();
     }
     if (use_anti_fee_sniping) {
