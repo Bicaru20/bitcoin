@@ -862,6 +862,23 @@ def test_bumpfee_dont_backdate(self, rbf_node):
 
     wallet.unloadwallet()
 
+    def test_bumpfee_timebased_locktime(self, rbf_node):
+        self.log.info(f"Test to check bumpfee don't anti fee snipe if original tx had time-based locktime")
+
+        rbf_node.createwallet("rbf")
+        wallet = rbf_node.get_wallet_rpc("rbf")
+        self.generatetoaddress(rbf_node, 101, wallet.getnewaddress())
+
+        original_locktime = 500000000
+        tx = wallet.send(outputs={wallet.getnewaddress(): 9}, fee_rate=2, locktime=original_locktime)
+        hex_tx = rbf_node.getrawtransaction(tx["txid"])
+
+        # Replacement with higher fee_rate
+        change_addr = get_change_address(tx["txid"], wallet)[0]
+        bumped = wallet.bumpfee(txid=tx["txid"], options={"fee_rate":5, "outputs": [{change_addr: 10}]})
+
+        locktime = rbf_node.getrawtransaction(bumped["txid"],True)["locktime"]
+        assert_equal(original_locktime, locktime)
 
 if __name__ == "__main__":
     BumpFeeTest(__file__).main()
