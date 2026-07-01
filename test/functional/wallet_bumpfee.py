@@ -116,6 +116,7 @@ class BumpFeeTest(BitcoinTestFramework):
         # Context independent tests
         test_feerate_checks_replaced_outputs(self, rbf_node, peer_node)
         test_bumpfee_with_feerate_ignores_walletincrementalrelayfee(self, rbf_node, peer_node)
+        test_bumpfee_timebased_locktime(self, rbf_node)
 
     def test_invalid_parameters(self, rbf_node, peer_node, dest_address):
         self.log.info('Test invalid parameters')
@@ -465,7 +466,6 @@ def test_bumpfee_with_abandoned_descendant_succeeds(self, rbf_node, rbf_node_add
     rbf_node.walletpassphrase(WALLET_PASSPHRASE, WALLET_PASSPHRASE_TIMEOUT)
     self.connect_nodes(1, 0)
     self.clear_mempool()
-
 
 def test_small_output_with_feerate_succeeds(self, rbf_node, dest_address):
     self.log.info('Testing small output with feerate bump succeeds')
@@ -830,6 +830,25 @@ def test_bumpfee_with_feerate_ignores_walletincrementalrelayfee(self, rbf_node, 
     rbf_node.bumpfee(tx["txid"], {"fee_rate": 2.1})
     self.clear_mempool()
 
+def test_bumpfee_timebased_locktime(self, rbf_node):
+    self.log.info("Test to check bumpfee don't anti fee snipe if original tx had time-based locktime")
+
+    rbf_node.createwallet("rbf")
+    wallet = rbf_node.get_wallet_rpc("rbf")
+    self.generatetoaddress(rbf_node, 101, wallet.getnewaddress())
+
+    original_locktime = 500000000
+    tx = wallet.send(outputs={wallet.getnewaddress(): 9}, fee_rate=2, locktime=original_locktime)
+
+    # Replacement with higher fee_rate
+    change_addr = get_change_address(tx["txid"], wallet)[0]
+    bumped = wallet.bumpfee(txid=tx["txid"], options={"fee_rate":5, "outputs": [{change_addr: 10}]})
+
+    bumpfee_locktime = rbf_node.getrawtransaction(bumped["txid"],True)["locktime"]
+    assert_equal(original_locktime, bumpfee_locktime)
+
+    node.unloadwallet("rbf")
+    self.clear_mempool()
 
 if __name__ == "__main__":
     BumpFeeTest(__file__).main()
