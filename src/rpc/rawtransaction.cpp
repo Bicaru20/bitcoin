@@ -2072,6 +2072,100 @@ static RPCMethod analyzepsbt()
     };
 }
 
+static RPCMethod addinputpsbt()
+{
+      return RPCMethod{
+        "addinputpsbt",
+        "Add an input/s to the psbt passed\n",
+            {
+                {"psbt", RPCArg::Type::STR, RPCArg::Optional::NO, "A base64 string of a PSBT"},
+                {"inputs", RPCArg::Type::ARR, RPCArg::Optional::NO, "The inputs",
+                    {
+                        //{"hex", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "A hex-encoded PSBTInput"},
+                        {"", RPCArg::Type::OBJ, RPCArg::Optional::OMITTED, "",
+                            {
+                                {"txid", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The transaction id"},
+                                {"vout", RPCArg::Type::NUM, RPCArg::Optional::NO, "The output number"},
+                                {"sequence", RPCArg::Type::NUM, RPCArg::DefaultHint{"depends on the value of the 'replaceable' and 'locktime' arguments"}, "The sequence number"},
+                            },
+                        },
+                    },
+                },
+            },
+            RPCResult{
+                    RPCResult::Type::STR, "", "The resulting raw transaction (base64-encoded string)"
+                },
+            RPCExamples {
+                HelpExampleCli("addinputpsbt", "\"psbt\" \"[{\"txid\":\"myid\",\"vout\":0, \"sequence\":0}]\"")
+                + HelpExampleCli("addinputpsbt", "\"psbt\" \"[hex-encoded PSBTInput]\"")
+            },
+        [](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    // Unserialize the transaction
+    util::Result<PartiallySignedTransaction> psbt_res = DecodeBase64PSBT(request.params[0].get_str());
+    if (!psbt_res) {
+        throw JSONRPCError(RPC_DESERIALIZATION_ERROR, strprintf("TX decode failed %s", util::ErrorString(psbt_res).original));
+    }
+
+    PartiallySignedTransaction& psbt = *psbt_res;
+
+    if (psbt.GetVersion() != 2) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "addinputpsbt only operated on version 2 PSBTs");
+    }
+
+    UniValue inputs_to_add = UniValue(UniValue::VARR);
+    if (!request.params[1].isNull() & request.params[1].isArray()) {
+            inputs_to_add = request.params[1].get_array();
+    } else {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Error: The inputs must be passed inside an array");
+        }
+
+    if (!psbt.m_tx_modifiable.has_value() || !psbt.m_tx_modifiable->test(0)) {
+        psbt.m_tx_modifiable = std::bitset<8>(0b011);
+        // throw JSONRPCError(RPC_INVALID_PARAMETER, "Error: The modifiable inputs flag is not active");
+    }
+
+    for (const UniValue& input : inputs_to_add.getValues()) {
+        if (input.isStr()){
+            std::string hex_string = input.get_str();
+            DataStream ssinput{ParseHex(hex_string)};
+            PSBTInput new_input(deserialize, ssinput, psbt.GetVersion());
+            psbt.AddInput(new_input);
+
+        } else {
+            uint256 txid = ParseHashO(input, "txid");
+            int64_t vout = input.find_value("vout").getInt<int64_t>();
+            if (vout < 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid parameter, vout cannot be negative");
+
+            uint32_t nSequence = CTxIn::MAX_SEQUENCE_NONFINAL;
+            const UniValue& sequenceObj = input.find_value("sequence");
+            if (sequenceObj.isNum()) {
+                int64_t seqNr64 = sequenceObj.getInt<int64_t>();
+                if (seqNr64 < 0 || seqNr64 > CTxIn::SEQUENCE_FINAL) {
+                    throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid parameter, sequence number is out of range");
+                } else {
+                    nSequence = (uint32_t)seqNr64;
+                }
+            }
+            PSBTInput new_input{
+                psbt.GetVersion(),
+                Txid::FromUint256(txid),
+                (uint32_t)vout,
+                nSequence
+            };
+        }
+    }
+
+    // Serialize the PSBT
+    DataStream ssTx{};
+    ssTx << psbt;
+
+    return EncodeBase64(ssTx);
+},
+    };
+}
+
+
 RPCMethod descriptorprocesspsbt()
 {
     return RPCMethod{
@@ -2175,6 +2269,7 @@ void RegisterRawTransactionRPCCommands(CRPCTable& t)
         {"rawtransactions", &descriptorprocesspsbt},
         {"rawtransactions", &joinpsbts},
         {"rawtransactions", &analyzepsbt},
+        {"rawtransactions", &addinputpsbt},
     };
     for (const auto& c : commands) {
         t.appendCommand(c.name, &c);
