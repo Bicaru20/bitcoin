@@ -1322,6 +1322,13 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
         txNew.nLockTime = coin_control.m_locktime.value();
         // If we have a locktime set, we can't use anti-fee-sniping
         use_anti_fee_sniping = false;
+    } else if (coin_control.m_previous_locktime.has_value()) {
+            // If the previous locktime is time-based, we keep the same locktime,
+            // and we don't apply fee sniping
+            if (coin_control.m_previous_locktime >= LOCKTIME_THRESHOLD){
+                txNew.nLockTime = coin_control.m_previous_locktime.value();
+                use_anti_fee_sniping = false;
+            }
     }
     if (use_anti_fee_sniping) {
         DiscourageFeeSniping(txNew, rng_fast, wallet.chain(), wallet.GetLastBlockHash(), wallet.GetLastBlockHeight());
