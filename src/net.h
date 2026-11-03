@@ -44,6 +44,7 @@
 #include <memory>
 #include <optional>
 #include <queue>
+#include <set>
 #include <string_view>
 #include <thread>
 #include <unordered_set>
@@ -1670,6 +1671,10 @@ private:
     mutable Mutex m_nodes_mutex;
     std::atomic<NodeId> nLastNodeId{0};
     unsigned int nPrevNodeCount{0};
+
+    Mutex m_pending_outbound_mutex;
+    std::set<std::string> m_pending_outbound_hosts GUARDED_BY(m_pending_outbound_mutex);
+    std::set<CService> m_pending_outbound_addrs GUARDED_BY(m_pending_outbound_mutex);
 
     // Stores number of full-tx connections (outbound and manual) per network
     std::array<unsigned int, Network::NET_MAX> m_network_conn_counts GUARDED_BY(m_nodes_mutex) = {};

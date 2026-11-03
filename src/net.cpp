@@ -3147,29 +3147,65 @@ bool CConnman::OpenNetworkConnection(const CAddress& addrConnect,
         return false;
     }
 
-    CNode* pnode = ConnectNode(addrConnect, pszDest, fCountFailure, conn_type, use_v2transport, proxy_override);
+    // Hostname for name-based connections and the address:port for address-based ones.
+    const std::string dest{pszDest != nullptr ? std::string{pszDest} : std::string{}};
+    const CService addr{addrConnect.IsValid() ? CService{addrConnect} : CService{}};
 
-    if (!pnode)
-        return false;
-    pnode->grantOutbound = std::move(grant_outbound);
-
-    m_msgproc->InitializeNode(*pnode, m_local_services);
     {
-        LOCK(m_nodes_mutex);
-        m_nodes.push_back(pnode);
-
-        // update connection count by network
-        if (pnode->IsManualOrFullOutboundConn()) ++m_network_conn_counts[pnode->addr.GetNetwork()];
+        // Concurrent attempts can pass the previous checks, because none of
+        // them has registered its node in m_nodes yet resulting in duplicate
+        // connections.
+        LOCK(m_pending_outbound_mutex);
+        if ((!dest.empty() && m_pending_outbound_hosts.contains(dest)) ||
+            (addr.IsValid() && m_pending_outbound_addrs.contains(addr))) {
+            return false;
+        }
+        if (!dest.empty()) {
+            m_pending_outbound_hosts.insert(dest);
+        }
+        if (addr.IsValid()) {
+            m_pending_outbound_addrs.insert(addr);
+        }
     }
 
-    TRACEPOINT(net, outbound_connection,
-        pnode->GetId(),
-        pnode->m_addr_name.c_str(),
-        pnode->ConnectionTypeAsString().c_str(),
-        pnode->ConnectedThroughNetwork(),
-        GetNodeCount(ConnectionDirection::Out));
+    CNode* pnode = ConnectNode(addrConnect, pszDest, fCountFailure, conn_type, use_v2transport, proxy_override);
 
-    return true;
+    if (pnode) {
+        pnode->grantOutbound = std::move(grant_outbound);
+
+        m_msgproc->InitializeNode(*pnode, m_local_services);
+        {
+            LOCK(m_nodes_mutex);
+            m_nodes.push_back(pnode);
+
+            // update connection count by network
+            if (pnode->IsManualOrFullOutboundConn()) ++m_network_conn_counts[pnode->addr.GetNetwork()];
+        }
+
+        TRACEPOINT(net, outbound_connection,
+            pnode->GetId(),
+            pnode->m_addr_name.c_str(),
+            pnode->ConnectionTypeAsString().c_str(),
+            pnode->ConnectedThroughNetwork(),
+            GetNodeCount(ConnectionDirection::Out));
+
+        {
+            // Connection added to m_nodes. Remove it from pending outbouns to
+            // avoid rejecting the connection in the future for this reason.
+            LOCK(m_connman.m_pending_outbound_mutex);
+            if (!m_dest.empty()) {
+                m_connman.m_pending_outbound_hosts.erase(m_dest);
+            }
+            if (m_addr.IsValid()) {
+                m_connman.m_pending_outbound_addrs.erase(m_addr);
+            }
+        }
+
+        return true;
+
+    } else if {
+        return false;
+    }
 }
 
 std::optional<Network> CConnman::PrivateBroadcast::PickNetwork(std::optional<Proxy>& proxy) const
