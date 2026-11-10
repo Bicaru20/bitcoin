@@ -1877,6 +1877,22 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
         return;
     }
 
+    // Do not accept an inbound connection if we already have an outbound
+    // connection to the same peer.
+    {
+        LOCK(m_nodes_mutex);
+        const bool duplicate{std::ranges::any_of(m_nodes, [&addr](const CNode* pnode) {
+            if (pnode->fDisconnect || pnode->IsInboundConn()) return false;
+            if (pnode->IsFeelerConn() || pnode->IsPrivateBroadcastConn()) return false;
+            const CNetAddr& peer_ip{pnode->addr};
+            return peer_ip == CNetAddr{addr};
+        })};
+        if (duplicate) {
+            LogDebug(BCLog::NET, "connection from %s dropped: duplicate connection\n", addr.ToStringAddrPort());
+            return;
+        }
+    }
+
     if (nInbound >= m_max_inbound)
     {
         if (!AttemptToEvictConnection(/*evict_tx_relay_peer_only=*/false)) {
