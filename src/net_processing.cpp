@@ -3897,6 +3897,8 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         }
         if (!vRecv.empty())
             vRecv >> fRelay;
+
+        pfrom.SetRemoteNonce(nNonce);
         // Disconnect if we connected to ourself
         if (pfrom.IsInboundConn() && !m_connman.CheckIncomingNonce(nNonce))
         {
@@ -3904,6 +3906,8 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             pfrom.fDisconnect = true;
             return;
         }
+
+        m_connman.DropDuplicateConnections(pfrom);
 
         if (pfrom.IsInboundConn() && addrMe.IsRoutable())
         {

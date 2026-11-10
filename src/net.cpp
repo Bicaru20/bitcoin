@@ -377,6 +377,42 @@ bool CConnman::CheckIncomingNonce(uint64_t nonce)
     return true;
 }
 
+void CConnman::DropDuplicateConnections(CNode& node)
+{
+    AssertLockNotHeld(m_nodes_mutex);
+    LOCK(m_nodes_mutex);
+
+    std::vector<CNode*> same_peer;
+    for (CNode* pnode : m_nodes) {
+        if (pnode == &node || pnode->fDisconnect || !pnode->fSuccessfullyConnected) continue;
+        if (pnode->IsFeelerConn() || pnode->IsPrivateBroadcastConn()) continue;
+        const CNetAddr& peer_ip{pnode->addr};
+        if (peer_ip != CNetAddr{node.addr}) continue;
+        same_peer.push_back(pnode);
+    }
+    if (same_peer.empty()) return;
+    same_peer.push_back(&node);
+
+    const bool any_inbound{std::any_of(same_peer.begin(), same_peer.end(),
+                             [](const CNode* n) { return n->IsInboundConn(); })};
+    const bool any_outbound{std::any_of(same_peer.begin(), same_peer.end(),
+                              [](const CNode* n) { return !n->IsInboundConn();})};
+    if (!any_inbound || !any_outbound) return;
+
+    const auto conn_key{[](const CNode* n) {
+        return std::minmax(n->GetLocalNonce(), n->GetRemoteNonce());
+    }};
+    const CNode* keeper{*std::min_element(same_peer.begin(), same_peer.end(),
+        [&conn_key](const CNode* a, const CNode* b) { return conn_key(a) < conn_key(b);})};
+
+    for (CNode* pnode : same_peer) {
+        if (pnode == keeper) continue;
+        LogInfo("Duplicate connection to %s (%s), disconnecting in favor of node %d\n",
+                pnode->addr.ToStringAddrPort(), pnode->ConnectionTypeAsString(), keeper->GetId());
+        pnode->fDisconnect = true;
+    }
+}
+
 CNode* CConnman::ConnectNode(CAddress addrConnect,
                              const char* pszDest,
                              bool fCountFailure,
@@ -1839,6 +1875,22 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
     {
         LogDebug(BCLog::NET, "connection from %s dropped (discouraged)\n", addr.ToStringAddrPort());
         return;
+    }
+
+    // Do not accept an inbound connection if we already have an outbound
+    // connection to the same peer.
+    {
+        LOCK(m_nodes_mutex);
+        const bool duplicate{std::ranges::any_of(m_nodes, [&addr](const CNode* pnode) {
+            if (pnode->fDisconnect || pnode->IsInboundConn()) return false;
+            if (pnode->IsFeelerConn() || pnode->IsPrivateBroadcastConn()) return false;
+            const CNetAddr& peer_ip{pnode->addr};
+            return peer_ip == CNetAddr{addr};
+        })};
+        if (duplicate) {
+            LogDebug(BCLog::NET, "connection from %s dropped: duplicate connection\n", addr.ToStringAddrPort());
+            return;
+        }
     }
 
     if (nInbound >= m_max_inbound)
