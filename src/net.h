@@ -938,6 +938,16 @@ public:
         return nLocalHostNonce;
     }
 
+    void SetRemoteNonce(uint64_t nonce)
+    {
+        Assume(m_nonce_remote == 0);
+        m_nonce_remote = nonce;
+    }
+
+    uint64_t GetRemoteNonce() const {
+        return m_nonce_remote;
+    }
+
     int GetRefCount() const
     {
         assert(nRefCount >= 0);
@@ -1037,6 +1047,8 @@ private:
      * Otherwise this unique_ptr is empty.
      */
     std::unique_ptr<i2p::sam::Session> m_i2p_sam_session GUARDED_BY(m_sock_mutex);
+
+    std::atomic<uint64_t> m_nonce_remote{0};
 };
 
 /**
@@ -1278,6 +1290,9 @@ public:
 
     bool CheckIncomingNonce(uint64_t nonce) EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
     void ASMapHealthCheck();
+
+    // For duplicated connections in opposite directions, choose one for disconnection.
+    void DropDuplicateConnections(CNode& node) EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
 
     // alias for thread safety annotations only, not defined
     Mutex& GetNodesMutex() const LOCK_RETURNED(m_nodes_mutex);
